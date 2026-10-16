@@ -44,8 +44,14 @@ class PAK():
         0x10: ["map", "Htbl.bin"],
         0x11: "tex",
         0x12: "pal",
-        0x13: "over"
+        0x13: "over",
 
+        # 借用区，它们的命名法随原主
+        0x14: True,
+        0x15: True,
+        0x16: True,
+        0x17: True,
+        0x18: True
     }
 
     def __init__(self, pakPath: Path):
@@ -71,6 +77,12 @@ class PAK():
         src = src.removeprefix("MS7MST")
 
         return (int(src[0:2]), int(src[2:4]))
+
+    def __cat_mission_stage__(self, mission: int, stage: int) -> str:
+        """
+        上面那个函数的反函数
+        """
+        return "MS7MST{0:02n}{1:02n}".format(mission, stage)
 
     def __get_subFile_name__(self, subFile_bin: np.void) -> str:
         (_type, index) = (int(subFile_bin["type"]), int(subFile_bin["index"]))
@@ -118,7 +130,7 @@ class PAK():
                     subTypeList = "CBA"
                     return "{0:s}_{1:s}{2:s}{3:s}".format(
                         self.Typename[_type][0],
-                        self.pakPath.stem,
+                        self.__cat_mission_stage__(self.mission, self.stage),
                         (subTypeList[index] if (0 <= index < 3)
                          else "{0:02n}".format(index)),
                         self.Typename[_type][-1]
@@ -127,7 +139,7 @@ class PAK():
             elif (0x11 <= _type <= 0x12):
                 if ((self.mission, self.stage) != (0, 0)):
                     return "{0:s}.{1:s}".format(
-                        self.pakPath.stem,
+                        self.__cat_mission_stage__(self.mission, self.stage),
                         self.Typename[_type]
                     )
 
@@ -154,7 +166,8 @@ class PAK():
                     subTypeList = "CBA"
                     return "_{0:s}_{1:s}{2:s}{3:s}".format(
                            self.Typename[0x0f][0],
-                           bs.stageCloneDict[self.pakPath.stem],
+                           bs.stageCloneDict[self.__cat_mission_stage__(
+                               self.mission, self.stage)],
                            subTypeList[index],
                            self.Typename[0x0f][-1],
                     )
@@ -164,7 +177,8 @@ class PAK():
                     subTypeList = "CBA"
                     return "_{0:s}_{1:s}{2:s}{3:s}".format(
                            self.Typename[0x0f][0],
-                           bs.stageCloneDict[self.pakPath.stem],
+                           bs.stageCloneDict[self.__cat_mission_stage__(
+                               self.mission, self.stage)],
                            subTypeList[index],
                            self.Typename[0x10][-1],
                     )
@@ -172,14 +186,16 @@ class PAK():
             elif (_type == 0x17):  # 0x11
                 if ((self.mission, self.stage) != (0, 0)):
                     return "_{0:s}.{1:s}".format(
-                        bs.stageCloneDict[self.pakPath.stem],
+                        bs.stageCloneDict[self.__cat_mission_stage__(
+                            self.mission, self.stage)],
                         self.Typename[0x11]
                     )
 
             elif (_type == 0x18):  # 0x12
                 if ((self.mission, self.stage) != (0, 0)):
                     return "_{0:s}.{1:s}".format(
-                        bs.stageCloneDict[self.pakPath.stem],
+                           bs.stageCloneDict[self.__cat_mission_stage__(
+                               self.mission, self.stage)],
                         self.Typename[0x12]
                     )
 
@@ -342,7 +358,7 @@ def main():
                            type=Path, required=False, default=Path("./"), dest="dir")
     cmdParser.add_argument("-f", "--file", help="指定文件",
                            type=Path, required=True, dest="pakPath")
-    cmdParser.add_argument("-c", "--create", help="创建一个新归档(此模式下必须配合-T选项)",
+    cmdParser.add_argument("-c", "--create", help="创建一个新归档(此模式下必须配合-T选项)(重要提示：由于程序根据文件名定位所对应关卡部分，新建的归档名最好和原档名一致)",
                            required=False, action="store_const", const='c', dest="create", default=None)
     cmdParser.add_argument("-x", "--extract", help="从归档中解出文件",
                            required=False, action="store_const", const='x', dest="extract", default=None)
