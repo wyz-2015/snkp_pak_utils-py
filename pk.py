@@ -21,7 +21,7 @@ class PK():
 
     Type_Note = {
         0: "原始数据",
-        1: "...",
+        1: "块式256节点树编码",
         2: "LZSS变种压缩算法"
     }
 
@@ -40,10 +40,14 @@ class PK():
     def set_type(self, _type: int):
         """
         强行设定type，覆盖读头所得
+        写模式下，这个函数要先调用
         """
         self.type = _type
         print("已强行设定编码模式为：0x{0:02x} {1:s}".format(
             self.type, self.Type_Note[self.type]))
+
+    #############################
+    # 解码
 
     def read_head(self):
         self.pkFile = open(self.pkFilePath, "rb")
@@ -64,6 +68,9 @@ class PK():
 
         print("编码类型：0x{0:02x} {1:s}\n解码后理论大小：{2:n}".format(
             self.type, self.Type_Note[self.type], self.decodeSize))
+
+    ################################
+    # type 2
 
     def __read_flag_bit__(self, pkFile: IO[bytes], flag: np.uint8, bitPos: np.uint8) -> tuple[np.uint8, np.uint8, np.uint8]:
         if (bitPos > 7):
@@ -143,6 +150,72 @@ class PK():
                 distance = 0x100 - np.uint16(offsetByte)
                 self.__copy_match__(outFile, distance, length)
 
+    ##################################
+    # type 1
+
+    def decompress_tree_stream(self, outFile: IO[bytes]):
+        while (outFile.tell() < self.decodeSize):
+            node = np.arange(0, 256, dtype=np.uint8)
+            child = np.zeros(256, dtype=np.uint8)
+            stack = []
+
+            entryCount = int(np.fromfile(
+                self.pkFile, dtype=np.uint8, count=1)[0])
+            usedNodes = 0
+            while (True):
+                if (entryCount > 0x7f):
+                    usedNodes += entryCount - 0x7f
+                    entryCount = 0
+
+                if (usedNodes == 256):
+                    break
+
+                for i in range(0, entryCount + 1):
+                    symbol = np.fromfile(
+                        self.pkFile, dtype=np.uint8, count=1)[0]
+
+                    node[usedNodes] = symbol
+
+                    # usedNodes != node[usedNodes] 说明该节点是内部节点。
+                    # 内部节点除了node[usedNodes]外，还需要再读一个字节作为child[usedNodes]。
+                    if (usedNodes != node[usedNodes]):
+                        child[usedNodes] = np.fromfile(
+                            self.pkFile, dtype=np.uint8, count=1)[0]
+
+                    usedNodes += 1
+
+                if (usedNodes == 256):
+                    break
+
+                entryCount = int(np.fromfile(
+                    self.pkFile, dtype=np.uint8, count=1)[0])
+
+            rootCount = int(np.fromfile(self.pkFile, dtype=">i4", count=1)[0])
+
+            while (True):
+                rootCount_old = rootCount
+                stackSize_old = len(stack)
+
+                if (not stack):
+                    rootCount -= 1
+
+                    if (rootCount_old == 0):
+                        break
+
+                    index = int(np.fromfile(
+                        self.pkFile, dtype=np.uint8, count=1)[0])
+
+                else:
+                    index = stack.pop()
+
+                if (index == node[index]):
+                    np.uint8(index).tofile(outFile)
+                else:
+                    stackSize_old = len(stack)
+                    stack.append(int(child[index]))
+
+                    stack.append(int(node[index]))
+
     def decode(self, outFilePath: Path):
         match (self.type):
             case 0:  # 直接复制
@@ -152,8 +225,10 @@ class PK():
                 shutil.copyfileobj(self.pkFile, outFile)
 
                 outFile.close()
-            case 1:
-                pass  # TODO
+            case 1:  # 块式256节点树编码
+                outFile = open(outFilePath, "wb")
+                self.decompress_tree_stream(outFile)
+                outFile.close()
             case 2:  # LESS变种解压缩
                 outFile = open(outFilePath, "wb+")
                 self.decompress_lzss_like(outFile)
@@ -161,13 +236,55 @@ class PK():
             case _:
                 raise ValueError("未知类型代号：{0:n}".format(self.type))
 
+    ##########################
+    # 编码
+
+    def write_head(self, inFilePath: Path):
+        match (self.type):  # 在这里就检测类型，若有问题，也不用打开文件指针
+            case 0:
+                print("编码类型：{0:n} {1:s}".format(
+                    self.type, self.Type_Note[self.type]))
+            case 1 | 2:
+                raise ValueError(
+                    "暂不打算支持生成1、2型编码方式的PK文件。当前指定编码方式：{0:n} {1:s}".format(self.type, self.Type_Note[self.type]))
+            case _:
+                raise ValueError("未知编码方式代号：{0:n}".format(self.type))
+
+        self.pkFile = open(self.pkFilePath, "wb")
+
+        self.magic = "PK"
+        self.reversed0 = 0
+        self.reversed1 = [0, 0]
+
+        if (inFilePath.is_file()):
+            self.decodeSize = inFilePath.stat().st_size
+        else:
+            raise TypeError("{0}不是一个“文件”".format(inFilePath))
+
+        head = np.zeros(1, dtype=self.Struct_PK_Head)[0]
+        head["magic"] = self.magic.encode("utf-8")
+        head["reversed0"] = self.reversed0
+        head["decodeSize"] = self.decodeSize
+        head["reversed1"] = self.reversed1
+
+        head["type"] = self.type
+
+        head.tofile(self.pkFile)
+
+    def encode(self, inFilePath: Path):
+        if (self.type == 0):
+            inFile = open(inFilePath, "rb")
+            shutil.copyfileobj(inFile, self.pkFile)
+
+            inFile.close()
+
     def clear(self):
         self.pkFile.close()
 
 
 def main():
     cmdParser = argparse.ArgumentParser(
-        description="一款支持 解码 Metal Slug 3D、7 等SNK游戏 中出现的被称为“PK”的特有单文件已编码格式文件 的工具。")
+        description="一款支持 解码 Metal Slug 3D、7 等SNK(P)游戏 中出现的被称为“PK”的特有单文件已编码格式文件 的工具。")
     cmdParser.add_argument("inFile", help="传入文件路径", type=Path)
     cmdParser.add_argument("-d", "--decode", help="解码", required=False,
                            action="store_const", const='d', default=None)
@@ -188,7 +305,12 @@ def main():
 
     match (mode):
         case 'e':
-            pass
+            pk = PK(args.outFilePath)
+            if (args.forceType is not None):
+                pk.set_type(args.forceType)
+            pk.write_head(args.inFile)
+            pk.encode(args.inFile)
+            pk.clear()
         case 'd':
             pk = PK(args.inFile)
             pk.read_head()
